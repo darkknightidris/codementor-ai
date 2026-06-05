@@ -12,22 +12,24 @@ export default function HistoryPage() {
   const supabase = createClient()
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) { router.push("/login"); return }
-      setUser(data.user)
-      loadReviews()
-    })
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push("/login"); return }
+      setUser(session.user)
+      
+      const { data, error } = await supabase
+        .from("code_reviews")
+        .select("id, language, mode, score, review_result, created_at, original_code")
+        .eq("user_id", session.user.id)
+        .order("created_at", { ascending: false })
+        .limit(50)
+      
+      console.log("Reviews:", data, "Error:", error)
+      setReviews(data || [])
+      setLoading(false)
+    }
+    init()
   }, [])
-
-  async function loadReviews() {
-    const { data } = await supabase
-      .from("code_reviews")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50)
-    setReviews(data || [])
-    setLoading(false)
-  }
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -46,7 +48,6 @@ export default function HistoryPage() {
 
   return (
     <div style={{minHeight:"100vh",background:"#f9fafb",fontFamily:"system-ui,sans-serif"}}>
-      {/* Navbar */}
       <nav style={{background:"white",borderBottom:"1px solid #e5e7eb",padding:"0.75rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div style={{display:"flex",alignItems:"center",gap:"16px"}}>
           <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
@@ -88,13 +89,10 @@ export default function HistoryPage() {
           <div style={{display:"flex",flexDirection:"column",gap:"12px"}}>
             {reviews.map((review) => (
               <div key={review.id} style={{background:"white",borderRadius:"12px",border:"1px solid #e5e7eb",padding:"16px",display:"flex",gap:"16px",alignItems:"flex-start"}}>
-                {/* Score badge */}
                 <div style={{width:"52px",height:"52px",borderRadius:"12px",background:"#f9fafb",border:`2px solid ${scoreColor(review.score)}`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                   <span style={{fontSize:"16px",fontWeight:700,color:scoreColor(review.score),lineHeight:1}}>{review.score}</span>
                   <span style={{fontSize:"9px",color:"#9ca3af",marginTop:"1px"}}>/ 100</span>
                 </div>
-
-                {/* Content */}
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"6px",flexWrap:"wrap"}}>
                     <span style={{background:"#f3f4f6",padding:"2px 8px",borderRadius:"99px",fontSize:"11px",fontWeight:500,color:"#374151"}}>{review.language}</span>
@@ -121,13 +119,6 @@ export default function HistoryPage() {
                       </span>
                     )}
                   </div>
-                </div>
-
-                {/* Code preview */}
-                <div style={{width:"180px",flexShrink:0,display:"none"}}>
-                  <pre style={{margin:0,fontSize:"10px",color:"#6b7280",fontFamily:"monospace",lineHeight:1.5,overflow:"hidden",maxHeight:"60px",background:"#f9fafb",padding:"8px",borderRadius:"6px"}}>
-                    {review.original_code?.substring(0, 120)}...
-                  </pre>
                 </div>
               </div>
             ))}
