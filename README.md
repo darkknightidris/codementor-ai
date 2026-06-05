@@ -121,7 +121,7 @@ GROQ_API_KEY=
 
 ## Developer
 
-Dibangun oleh [darkknightidris](https://github.com/darkknightidris) — dari Batam, Indonesia.
+Dibangun oleh [darkknightidris](https://github.com/darkknightidris) — dari Padang, Indonesia.
 
 ---
 
