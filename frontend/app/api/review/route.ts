@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     {
       cookies: {
         getAll() { return cookieStore.getAll() },
-        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+        setAll(cookiesToSet) {
           try { cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)) } catch {}
         },
       },
@@ -123,4 +123,3 @@ Kembalikan JSON dengan format PERSIS ini (tanpa backtick, tanpa teks lain):
 
   return NextResponse.json({ review: savedReview })
 }
-
