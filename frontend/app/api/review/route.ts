@@ -1,143 +1,124 @@
-// app/api/review/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import Anthropic from '@anthropic-ai/sdk'
-import { PLAN_LIMITS, ReviewMode } from '@/types'
+import { createServerClient } from '@supabase/ssr'
+import { createClient } from '@supabase/supabase-js'
+import Groq from 'groq-sdk'
+import { cookies } from 'next/headers'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY! })
 
-const SYSTEM_PROMPTS: Record<ReviewMode, string> = {
-  beginner: `Kamu adalah mentor coding yang sabar dan supportif untuk developer pemula Indonesia.
-Gunakan Bahasa Indonesia yang mudah dipahami. Jelaskan setiap masalah dengan analogi sederhana.
-Jangan menghakimi — selalu semangati user. Fokus pada 2-3 masalah terpenting saja, jangan overwhelming.
-Kembalikan HANYA JSON valid tanpa markdown fences.`,
+const PLAN_LIMITS: Record<string, number> = { free: 10, pro: 100, unlimited: 999999 }
 
-  standard: `Kamu adalah senior software engineer yang melakukan code review profesional.
-Gunakan campuran Bahasa Indonesia dan istilah teknis yang umum.
-Berikan feedback komprehensif tapi tetap actionable.
-Kembalikan HANYA JSON valid tanpa markdown fences.`,
-
-  senior: `You are a senior engineer at a top tech company doing a strict code review.
-Be thorough, use proper technical terminology in English.
-Treat this like a real production code review — no sugar coating.
-Return ONLY valid JSON without markdown fences.`,
+const SYSTEM_PROMPTS: Record<string, string> = {
+  beginner: `Kamu adalah mentor coding yang sabar untuk developer pemula Indonesia. Gunakan Bahasa Indonesia yang mudah dipahami. Jelaskan dengan analogi sederhana. Fokus pada 2-3 masalah terpenting. Kembalikan HANYA JSON valid tanpa markdown backticks.`,
+  standard: `Kamu adalah senior software engineer yang melakukan code review. Gunakan campuran Bahasa Indonesia dan istilah teknis. Berikan feedback komprehensif dan actionable. Kembalikan HANYA JSON valid tanpa markdown backticks.`,
+  senior: `You are a senior engineer doing a strict code review. Be thorough, use proper technical terminology. No sugar coating. Return ONLY valid JSON without markdown backticks.`,
 }
 
-const USER_PROMPT = (language: string, code: string) => `
-Review kode berikut dalam bahasa ${language}:
+export async function POST(req: NextRequest) {
+  const cookieStore = await cookies()
 
+  const supabaseAuth = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() { return cookieStore.getAll() },
+        setAll(cookiesToSet) {
+          try { cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)) } catch {}
+        },
+      },
+    }
+  )
+
+  const { data: { user } } = await supabaseAuth.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const supabaseAdmin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  )
+
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('*').eq('id', user.id).single()
+
+  if (!profile) {
+    await supabaseAdmin.from('profiles').insert({
+      id: user.id,
+      full_name: user.user_metadata?.full_name || '',
+      plan: 'free',
+      review_count_this_month: 0,
+      review_reset_date: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString(),
+    })
+  }
+
+  const currentProfile = profile!
+
+  const resetDate = new Date(currentProfile.review_reset_date)
+  const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  if (resetDate < firstOfMonth) {
+    await supabaseAdmin.from('profiles').update({
+      review_count_this_month: 0,
+      review_reset_date: firstOfMonth.toISOString()
+    }).eq('id', user.id)
+    currentProfile.review_count_this_month = 0
+  }
+
+  const limit = PLAN_LIMITS[currentProfile.plan] ?? 10
+  if (currentProfile.plan !== 'unlimited' && currentProfile.review_count_this_month >= limit) {
+    return NextResponse.json({ error: 'quota_exceeded', limit, plan: currentProfile.plan }, { status: 429 })
+  }
+
+  const body = await req.json()
+  const { code, language, mode } = body
+  if (!code?.trim() || !language || !mode) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
+  if (code.length > 10000) return NextResponse.json({ error: 'Code terlalu panjang (max 10.000 karakter)' }, { status: 400 })
+
+  const userPrompt = `Review kode berikut dalam bahasa ${language}:
 \`\`\`${language}
 ${code}
 \`\`\`
 
-Kembalikan JSON dengan format PERSIS ini:
-{
-  "score": <0-100>,
-  "summary": "<ringkasan 1-2 kalimat>",
-  "bugs": [{"line": <nomor|null>, "issue": "<masalah>", "fix": "<solusi>"}],
-  "security": [{"issue": "<masalah>", "severity": "<high|medium|low>", "fix": "<solusi>"}],
-  "performance": [{"issue": "<masalah>", "suggestion": "<saran>"}],
-  "best_practices": [{"issue": "<masalah>", "better": "<cara yang lebih baik>"}],
-  "improved_code": "<kode lengkap yang sudah diperbaiki, atau string kosong jika tidak ada masalah kritis>",
-  "encouragement": "<pesan semangat 1 kalimat>"
-}
-`
+Kembalikan JSON dengan format PERSIS ini (tanpa backtick, tanpa teks lain):
+{"score":<0-100>,"summary":"<ringkasan singkat>","bugs":[{"issue":"<masalah>","fix":"<solusi>"}],"security":[{"issue":"<masalah>","severity":"high|medium|low","fix":"<solusi>"}],"performance":[{"issue":"<masalah>","suggestion":"<saran>"}],"best_practices":[{"issue":"<masalah>","better":"<cara lebih baik>"}],"improved_code":"<kode diperbaiki>","encouragement":"<pesan semangat 1 kalimat>"}`
 
-export async function POST(req: NextRequest) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  // Get profile + check quota
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single()
-
-  if (profileError || !profile) {
-    return NextResponse.json({ error: 'Profile not found' }, { status: 404 })
-  }
-
-  // Reset quota if new month
-  const resetDate = new Date(profile.review_reset_date)
-  const firstOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-  if (resetDate < firstOfThisMonth) {
-    await supabase
-      .from('profiles')
-      .update({ review_count_this_month: 0, review_reset_date: firstOfThisMonth.toISOString() })
-      .eq('id', user.id)
-    profile.review_count_this_month = 0
-  }
-
-  // Check limit
-  const limit = PLAN_LIMITS[profile.plan as keyof typeof PLAN_LIMITS] ?? 10
-  if (profile.plan !== 'unlimited' && profile.review_count_this_month >= limit) {
-    return NextResponse.json(
-      { error: 'quota_exceeded', limit, plan: profile.plan },
-      { status: 429 }
-    )
-  }
-
-  const body = await req.json()
-  const { code, language, mode } = body as { code: string; language: string; mode: ReviewMode }
-
-  if (!code?.trim() || !language || !mode) {
-    return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
-  }
-
-  if (code.length > 10000) {
-    return NextResponse.json({ error: 'Code terlalu panjang (max 10.000 karakter)' }, { status: 400 })
-  }
-
-  // Call Anthropic
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+  const completion = await groq.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
     max_tokens: 2000,
-    system: SYSTEM_PROMPTS[mode],
-    messages: [{ role: 'user', content: USER_PROMPT(language, code) }],
+    temperature: 0.3,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPTS[mode] || SYSTEM_PROMPTS.standard },
+      { role: 'user', content: userPrompt }
+    ],
   })
 
-  const rawText = message.content.map(c => (c.type === 'text' ? c.text : '')).join('')
+  const rawText = completion.choices[0]?.message?.content || ''
+  
   let reviewResult
   try {
-    reviewResult = JSON.parse(rawText.replace(/```json|```/g, '').trim())
+    const cleaned = rawText.replace(/```json|```/g, '').trim()
+    reviewResult = JSON.parse(cleaned)
   } catch {
-    return NextResponse.json({ error: 'AI returned invalid response' }, { status: 500 })
+    return NextResponse.json({ error: 'AI returned invalid response', raw: rawText.substring(0, 200) }, { status: 500 })
   }
 
-  // Save to DB
-  const { data: savedReview, error: saveError } = await supabase
-    .from('code_reviews')
-    .insert({
-      user_id: user.id,
-      language,
-      mode,
-      original_code: code,
-      review_result: reviewResult,
-      score: reviewResult.score,
-    })
-    .select()
-    .single()
+  const { data: savedReview } = await supabaseAdmin.from('code_reviews').insert({
+    user_id: user.id,
+    language,
+    mode,
+    original_code: code,
+    review_result: reviewResult,
+    score: reviewResult.score,
+  }).select().single()
 
-  if (saveError) {
-    return NextResponse.json({ error: 'Failed to save review' }, { status: 500 })
-  }
+  await supabaseAdmin.from('profiles').update({
+    review_count_this_month: currentProfile.review_count_this_month + 1
+  }).eq('id', user.id)
 
-  // Increment usage counter
-  await supabase
-    .from('profiles')
-    .update({ review_count_this_month: profile.review_count_this_month + 1 })
-    .eq('id', user.id)
-
-  // Log usage
-  await supabase.from('usage_logs').insert({
+  await supabaseAdmin.from('usage_logs').insert({
     user_id: user.id,
     action: 'code_review',
-    meta: { language, mode, score: reviewResult.score },
+    meta: { language, mode, score: reviewResult.score }
   })
 
   return NextResponse.json({ review: savedReview })
