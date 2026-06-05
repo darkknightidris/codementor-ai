@@ -1,8 +1,8 @@
 export default function Home() {
   return (
-    
-      CodeMentor AI
-      Setup berhasil!
-    
+    <main style={{padding: "2rem"}}>
+      <h1>CodeMentor AI</h1>
+      <p>Setup berhasil!</p>
+    </main>
   )
 }
