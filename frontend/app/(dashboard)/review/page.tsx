@@ -1,6 +1,4 @@
 "use client"
-import Link from "next/link"
-
 import { useState, useEffect } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
@@ -73,10 +71,6 @@ export default function ReviewPage() {
             <span style={{color:"white",fontSize:"11px",fontWeight:600}}>CM</span>
           </div>
           <span style={{fontWeight:600,fontSize:"15px"}}>CodeMentor AI</span>
-          </div>
-          <div style={{display:"flex",gap:"4px"}}>
-            <Link href="/review" style={{padding:"5px 12px",fontSize:"13px",color:"#1d9e75",textDecoration:"none",borderRadius:"6px",background:"#f0fdf4",fontWeight:500}}>Review</Link>
-            <Link href="/history" style={{padding:"5px 12px",fontSize:"13px",color:"#6b7280",textDecoration:"none",borderRadius:"6px"}}>History</Link>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
           <span style={{fontSize:"13px",color:"#6b7280"}}>{user?.email}</span>
@@ -195,5 +189,3 @@ export default function ReviewPage() {
     </div>
   )
 }
-
-
