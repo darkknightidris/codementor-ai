@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
+import Link from "next/link"
 
 const LANGUAGES = ["javascript","typescript","python","php","java","go","rust","kotlin","cpp","c"]
 const MODES = [
@@ -16,8 +17,12 @@ export default function ReviewPage() {
   const [mode, setMode] = useState("standard")
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<any>(null)
+  const [reviewId, setReviewId] = useState<string | null>(null)
   const [error, setError] = useState("")
   const [user, setUser] = useState<any>(null)
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [sharing, setSharing] = useState(false)
+  const [copied, setCopied] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
@@ -34,8 +39,9 @@ export default function ReviewPage() {
     setLoading(true)
     setError("")
     setResult(null)
+    setShareUrl(null)
+    setReviewId(null)
     try {
-      const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch("/api/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -47,12 +53,35 @@ export default function ReviewPage() {
         else setError(data.error || "Terjadi kesalahan")
       } else {
         setResult(data.review.review_result)
+        setReviewId(data.review.id)
       }
     } catch (err) {
       setError("Gagal terhubung ke server")
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleShare() {
+    if (!reviewId) return
+    setSharing(true)
+    const token = Math.random().toString(36).substring(2, 15)
+    const { error } = await supabase
+      .from("code_reviews")
+      .update({ is_public: true, share_token: token })
+      .eq("id", reviewId)
+    if (!error) {
+      const url = `${window.location.origin}/share/${token}`
+      setShareUrl(url)
+    }
+    setSharing(false)
+  }
+
+  async function handleCopy() {
+    if (!shareUrl) return
+    await navigator.clipboard.writeText(shareUrl)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   async function handleLogout() {
@@ -64,13 +93,18 @@ export default function ReviewPage() {
 
   return (
     <div style={{minHeight:"100vh",background:"#f9fafb",fontFamily:"system-ui,sans-serif"}}>
-      {/* Navbar */}
       <nav style={{background:"white",borderBottom:"1px solid #e5e7eb",padding:"0.75rem 1.5rem",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-          <div style={{width:"28px",height:"28px",background:"#1d9e75",borderRadius:"7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <span style={{color:"white",fontSize:"11px",fontWeight:600}}>CM</span>
+        <div style={{display:"flex",alignItems:"center",gap:"16px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+            <div style={{width:"28px",height:"28px",background:"#1d9e75",borderRadius:"7px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <span style={{color:"white",fontSize:"11px",fontWeight:600}}>CM</span>
+            </div>
+            <span style={{fontWeight:600,fontSize:"15px"}}>CodeMentor AI</span>
           </div>
-          <span style={{fontWeight:600,fontSize:"15px"}}>CodeMentor AI</span>
+          <div style={{display:"flex",gap:"4px"}}>
+            <Link href="/review" style={{padding:"5px 12px",fontSize:"13px",color:"#1d9e75",textDecoration:"none",borderRadius:"6px",background:"#f0fdf4",fontWeight:500}}>Review</Link>
+            <Link href="/history" style={{padding:"5px 12px",fontSize:"13px",color:"#6b7280",textDecoration:"none",borderRadius:"6px"}}>History</Link>
+          </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
           <span style={{fontSize:"13px",color:"#6b7280"}}>{user?.email}</span>
@@ -109,8 +143,24 @@ export default function ReviewPage() {
 
         {/* Result panel */}
         <div style={{background:"white",borderRadius:"12px",border:"1px solid #e5e7eb",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-          <div style={{padding:"12px 16px",borderBottom:"1px solid #e5e7eb"}}>
+          <div style={{padding:"12px 16px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span style={{fontSize:"13px",fontWeight:500}}>Hasil review</span>
+            {result && reviewId && (
+              <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+                {shareUrl ? (
+                  <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+                    <input readOnly value={shareUrl} style={{fontSize:"11px",padding:"3px 8px",border:"1px solid #e5e7eb",borderRadius:"6px",width:"180px",color:"#6b7280"}} />
+                    <button onClick={handleCopy} style={{fontSize:"11px",padding:"4px 10px",background: copied ? "#1d9e75" : "#f3f4f6",color: copied ? "white" : "#374151",border:"none",borderRadius:"6px",cursor:"pointer"}}>
+                      {copied ? "Tersalin!" : "Copy"}
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={handleShare} disabled={sharing} style={{fontSize:"12px",padding:"4px 12px",background:"#f0fdf4",color:"#1d9e75",border:"1px solid #bbf7d0",borderRadius:"6px",cursor:"pointer",fontWeight:500}}>
+                    {sharing ? "..." : "🔗 Bagikan"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <div style={{flex:1,padding:"16px",overflowY:"auto"}}>
             {!result && !error && !loading && (
@@ -129,7 +179,6 @@ export default function ReviewPage() {
             )}
             {result && (
               <div style={{display:"flex",flexDirection:"column",gap:"12px"}}>
-                {/* Score */}
                 <div style={{border:"1px solid #e5e7eb",borderRadius:"8px",overflow:"hidden"}}>
                   <div style={{padding:"8px 12px",background:"#f9fafb",borderBottom:"1px solid #e5e7eb",fontSize:"12px",fontWeight:500}}>Skor kode</div>
                   <div style={{padding:"12px"}}>
@@ -143,7 +192,6 @@ export default function ReviewPage() {
                   </div>
                 </div>
 
-                {/* Issues */}
                 {[
                   { key: "bugs", label: "Bug ditemukan", color: "#fee2e2", textColor: "#991b1b" },
                   { key: "security", label: "Security issues", color: "#fef3c7", textColor: "#92400e" },
@@ -167,7 +215,6 @@ export default function ReviewPage() {
                   )
                 )}
 
-                {/* Improved code */}
                 {result.improved_code && (
                   <div style={{border:"1px solid #e5e7eb",borderRadius:"8px",overflow:"hidden"}}>
                     <div style={{padding:"8px 12px",background:"#f0fdf4",borderBottom:"1px solid #e5e7eb",fontSize:"12px",fontWeight:500,color:"#15803d"}}>Kode yang diperbaiki</div>
@@ -175,7 +222,6 @@ export default function ReviewPage() {
                   </div>
                 )}
 
-                {/* Encouragement */}
                 {result.encouragement && (
                   <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:"8px",padding:"10px 12px",fontSize:"13px",color:"#15803d"}}>
                     {result.encouragement}
